@@ -2,13 +2,9 @@ package com.thoughtworks.rslist.service;
 
 import com.thoughtworks.rslist.domain.Trade;
 import com.thoughtworks.rslist.domain.Vote;
-import com.thoughtworks.rslist.dto.RsEventDto;
-import com.thoughtworks.rslist.dto.UserDto;
-import com.thoughtworks.rslist.dto.VoteDto;
-import com.thoughtworks.rslist.repository.RsEventRepository;
-import com.thoughtworks.rslist.repository.UserRepository;
-import com.thoughtworks.rslist.repository.VoteRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.thoughtworks.rslist.dto.*;
+import com.thoughtworks.rslist.exception.FailedToBuyRankException;
+import com.thoughtworks.rslist.repository.*;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -18,11 +14,16 @@ public class RsService {
   final RsEventRepository rsEventRepository;
   final UserRepository userRepository;
   final VoteRepository voteRepository;
+  final RankDtoRepository rankDtoRepository;
+  final RankRecordRepository rankRecordRepository;
 
-  public RsService(RsEventRepository rsEventRepository, UserRepository userRepository, VoteRepository voteRepository) {
+  public RsService(RsEventRepository rsEventRepository, UserRepository userRepository, VoteRepository voteRepository,
+                   RankDtoRepository rankDtoRepository, RankRecordRepository rankRecordRepository) {
     this.rsEventRepository = rsEventRepository;
     this.userRepository = userRepository;
     this.voteRepository = voteRepository;
+    this.rankDtoRepository = rankDtoRepository;
+    this.rankRecordRepository = rankRecordRepository;
   }
 
   public void vote(Vote vote, int rsEventId) {
@@ -49,7 +50,29 @@ public class RsService {
     rsEventRepository.save(rsEvent);
   }
 
-  public void buy(Trade trade, int id) {
-
+  public void buy(Trade trade, int eventId) {
+    int rank = trade.getRank();
+    Optional<RankDto> optionalRankDto = rankDtoRepository.findRankDtoByRankPos(rank);
+    if (optionalRankDto.isPresent()) {
+      RankDto rankDto = optionalRankDto.get();
+      if (trade.getAmount() > rankDto.getPrice()) {
+        rsEventRepository.deleteById(rankDto.getRsEventId());
+        rankDtoRepository.deleteById(rankDto.getId());
+        rankDto.setRsEventId(eventId);
+        rankDto.setPrice(trade.getAmount());
+        rankDtoRepository.save(rankDto);
+        RankRecordDto rankRecordDto = RankRecordDto.builder().price(rankDto.getPrice()).rankPos(rankDto.getRankPos())
+                .rsEventId(rankDto.getRsEventId()).build();
+        rankRecordRepository.save(rankRecordDto);
+      } else {
+        throw new FailedToBuyRankException("The amount you pay is not enough to buy that rank");
+      }
+    } else {
+      RankDto rankDto = RankDto.builder().rankPos(rank).price(trade.getAmount()).rsEventId(eventId).build();
+      rankDtoRepository.save(rankDto);
+      RankRecordDto rankRecordDto = RankRecordDto.builder().price(rankDto.getPrice()).rankPos(rankDto.getRankPos())
+              .rsEventId(rankDto.getRsEventId()).build();
+      rankRecordRepository.save(rankRecordDto);
+    }
   }
 }

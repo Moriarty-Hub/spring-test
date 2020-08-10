@@ -3,10 +3,12 @@ package com.thoughtworks.rslist.api;
 import com.thoughtworks.rslist.domain.RsEvent;
 import com.thoughtworks.rslist.domain.Trade;
 import com.thoughtworks.rslist.domain.Vote;
+import com.thoughtworks.rslist.dto.RankDto;
 import com.thoughtworks.rslist.dto.RsEventDto;
 import com.thoughtworks.rslist.dto.UserDto;
 import com.thoughtworks.rslist.exception.Error;
 import com.thoughtworks.rslist.exception.RequestNotValidException;
+import com.thoughtworks.rslist.repository.RankDtoRepository;
 import com.thoughtworks.rslist.repository.RsEventRepository;
 import com.thoughtworks.rslist.repository.UserRepository;
 import com.thoughtworks.rslist.service.RsService;
@@ -22,8 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.validation.Valid;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
@@ -31,12 +32,13 @@ import java.util.stream.Collectors;
 public class RsController {
   @Autowired RsEventRepository rsEventRepository;
   @Autowired UserRepository userRepository;
+  @Autowired RankDtoRepository rankDtoRepository;
   @Autowired RsService rsService;
 
   @GetMapping("/rs/list")
   public ResponseEntity<List<RsEvent>> getRsEventListBetween(
       @RequestParam(required = false) Integer start, @RequestParam(required = false) Integer end) {
-    List<RsEvent> rsEvents =
+    /*List<RsEvent> rsEvents =
         rsEventRepository.findAll().stream()
             .map(
                 item ->
@@ -50,7 +52,35 @@ public class RsController {
     if (start == null || end == null) {
       return ResponseEntity.ok(rsEvents);
     }
-    return ResponseEntity.ok(rsEvents.subList(start - 1, end));
+    return ResponseEntity.ok(rsEvents.subList(start - 1, end));*/
+    List<RsEvent> rsEvents =
+            rsEventRepository.findAll().stream()
+                    .map(
+                            item ->
+                                    RsEvent.builder()
+                                            .eventName(item.getEventName())
+                                            .keyword(item.getKeyword())
+                                            .userId(item.getId())
+                                            .voteNum(item.getVoteNum())
+                                            .build()).collect(Collectors.toList());
+    List<RankDto> rankDtoList = rankDtoRepository.findAll();
+    List<RsEvent> sortedRsEventList = new ArrayList<>(rsEvents.size());
+    for (int i = 0; i < rsEvents.size(); i++) {
+      sortedRsEventList.add(null);
+    }
+    for (RankDto rankDto : rankDtoList) {
+      sortedRsEventList.set(rankDto.getRankPos() - 1, rsEvents.remove((int) rankDto.getRsEventId() - 1));
+    }
+    rsEvents = rsEvents.stream().sorted(Comparator.comparing(RsEvent::getVoteNum).reversed()).collect(Collectors.toList());
+    for (int i = 0; i < sortedRsEventList.size(); i++) {
+      if (sortedRsEventList.get(i) == null) {
+        sortedRsEventList.set(i, rsEvents.remove(0));
+      }
+    }
+    if (start == null || end == null) {
+      return ResponseEntity.ok(sortedRsEventList);
+    }
+    return ResponseEntity.ok(sortedRsEventList.subList(start - 1, end));
   }
 
   @GetMapping("/rs/{index}")
@@ -101,11 +131,9 @@ public class RsController {
     return ResponseEntity.ok().build();
   }
 
-
   @ExceptionHandler(RequestNotValidException.class)
   public ResponseEntity<Error> handleRequestErrorHandler(RequestNotValidException e) {
-    Error error = new Error();
-    error.setError(e.getMessage());
+    Error error = new Error(e.getMessage());
     return ResponseEntity.badRequest().body(error);
   }
 }

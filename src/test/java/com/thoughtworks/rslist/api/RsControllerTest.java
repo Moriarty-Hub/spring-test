@@ -1,26 +1,22 @@
 package com.thoughtworks.rslist.api;
 
-import com.thoughtworks.rslist.dto.RsEventDto;
-import com.thoughtworks.rslist.dto.UserDto;
-import com.thoughtworks.rslist.dto.VoteDto;
-import com.thoughtworks.rslist.repository.RsEventRepository;
-import com.thoughtworks.rslist.repository.UserRepository;
-import com.thoughtworks.rslist.repository.VoteRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.thoughtworks.rslist.domain.Trade;
+import com.thoughtworks.rslist.dto.*;
+import com.thoughtworks.rslist.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
-import static org.hamcrest.Matchers.hasKey;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -30,11 +26,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class RsControllerTest {
   @Autowired private MockMvc mockMvc;
   @Autowired UserRepository userRepository;
   @Autowired RsEventRepository rsEventRepository;
   @Autowired VoteRepository voteRepository;
+  @Autowired RankDtoRepository rankDtoRepository;
+  @Autowired RankRecordRepository rankRecordRepository;
   private UserDto userDto;
 
   @BeforeEach
@@ -176,7 +175,6 @@ class RsControllerTest {
                 .content(jsonValue)
                 .contentType(MediaType.APPLICATION_JSON))
         .andExpect(status().isOk());
-
     UserDto userDto = userRepository.findById(save.getId()).get();
     RsEventDto newRsEvent = rsEventRepository.findById(rsEventDto.getId()).get();
     assertEquals(userDto.getVoteNum(), 9);
@@ -184,5 +182,202 @@ class RsControllerTest {
     List<VoteDto> voteDtos =  voteRepository.findAll();
     assertEquals(voteDtos.size(), 1);
     assertEquals(voteDtos.get(0).getNum(), 1);
+  }
+
+  @Test
+  void should_get_specified_rank_and_origin_event_not_be_deleted_when_price_of_rank_is_zero() throws Exception {
+    UserDto userDtoTestData = UserDto.builder().userName("user").gender("male").age(20).email("user@gmail.com")
+            .phone("12345678901").build();
+    userRepository.save(userDtoTestData);
+    RsEventDto rsEventDtoTestData1 = RsEventDto.builder().eventName("event1").keyword("keyword1").voteNum(10)
+            .user(userDtoTestData).build();
+    RsEventDto rsEventDtoTestData2 = RsEventDto.builder().eventName("event2").keyword("keyword2").voteNum(0)
+            .user(userDtoTestData).build();
+    RsEventDto rsEventDtoTestData3 = RsEventDto.builder().eventName("event3").keyword("keyword3").voteNum(5)
+            .user(userDtoTestData).build();
+    rsEventRepository.save(rsEventDtoTestData1);
+    rsEventRepository.save(rsEventDtoTestData2);
+    rsEventRepository.save(rsEventDtoTestData3);
+    assertEquals(3, rsEventRepository.count());
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(3)))
+            .andExpect(jsonPath("$[0].eventName", is("event1")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[0].voteNum", is(10)))
+            .andExpect(jsonPath("$[1].eventName", is("event3")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword3")))
+            .andExpect(jsonPath("$[1].voteNum", is(5)))
+            .andExpect(jsonPath("$[2].eventName", is("event2")))
+            .andExpect(jsonPath("$[2].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[2].voteNum", is(0)))
+            .andExpect(status().isOk());
+    assertEquals(0, rankDtoRepository.count());
+
+    ObjectMapper objectMapper = new ObjectMapper();
+    Trade trade = new Trade(100, 1);
+    mockMvc.perform(post("/rs/buy/3").contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsBytes(trade))).andExpect(status().isOk());
+
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(3)))
+            .andExpect(jsonPath("$[0].eventName", is("event3")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword3")))
+            .andExpect(jsonPath("$[0].voteNum", is(5)))
+            .andExpect(jsonPath("$[1].eventName", is("event1")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[1].voteNum", is(10)))
+            .andExpect(jsonPath("$[2].eventName", is("event2")))
+            .andExpect(jsonPath("$[2].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[2].voteNum", is(0)))
+            .andExpect(status().isOk());
+    List<RankDto> rankDtoList = rankDtoRepository.findAll();
+    assertEquals(1, rankDtoList.size());
+    assertEquals(100, rankDtoList.get(0).getPrice());
+    assertEquals(1, rankDtoList.get(0).getRankPos());
+    assertEquals(3, rankDtoList.get(0).getRsEventId());
+
+    List<RankRecordDto> rankRecordList = rankRecordRepository.findAll();
+    assertEquals(1, rankRecordList.size());
+    assertEquals(100, rankRecordList.get(0).getPrice());
+    assertEquals(1, rankRecordList.get(0).getRankPos());
+    assertEquals(3, rankRecordList.get(0).getRsEventId());
+  }
+
+  @Test
+  void should_get_specified_rank_and_delete_origin_event_when_price_or_rank_is_not_zero() throws Exception {
+    UserDto userDtoTestData = UserDto.builder().userName("user").gender("male").age(20).email("user@gmail.com")
+            .phone("12345678901").build();
+    userRepository.save(userDtoTestData);
+    RsEventDto rsEventDtoTestData1 = RsEventDto.builder().eventName("event1").keyword("keyword1").voteNum(10)
+            .user(userDtoTestData).build();
+    RsEventDto rsEventDtoTestData2 = RsEventDto.builder().eventName("event2").keyword("keyword2").voteNum(0)
+            .user(userDtoTestData).build();
+    RsEventDto rsEventDtoTestData3 = RsEventDto.builder().eventName("event3").keyword("keyword3").voteNum(5)
+            .user(userDtoTestData).build();
+    rsEventRepository.save(rsEventDtoTestData1);
+    rsEventRepository.save(rsEventDtoTestData2);
+    rsEventRepository.save(rsEventDtoTestData3);
+    assertEquals(3, rsEventRepository.count());
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(3)))
+            .andExpect(jsonPath("$[0].eventName", is("event1")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[0].voteNum", is(10)))
+            .andExpect(jsonPath("$[1].eventName", is("event3")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword3")))
+            .andExpect(jsonPath("$[1].voteNum", is(5)))
+            .andExpect(jsonPath("$[2].eventName", is("event2")))
+            .andExpect(jsonPath("$[2].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[2].voteNum", is(0)))
+            .andExpect(status().isOk());
+    assertEquals(0, rankDtoRepository.count());
+
+    ObjectMapper objectMapper = new ObjectMapper();
+    Trade trade1 = new Trade(100, 1);
+    mockMvc.perform(post("/rs/buy/3").contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsBytes(trade1))).andExpect(status().isOk());
+
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(3)))
+            .andExpect(jsonPath("$[0].eventName", is("event3")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword3")))
+            .andExpect(jsonPath("$[0].voteNum", is(5)))
+            .andExpect(jsonPath("$[1].eventName", is("event1")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[1].voteNum", is(10)))
+            .andExpect(jsonPath("$[2].eventName", is("event2")))
+            .andExpect(jsonPath("$[2].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[2].voteNum", is(0)))
+            .andExpect(status().isOk());
+    List<RankDto> rankDtoList = rankDtoRepository.findAll();
+    assertEquals(1, rankDtoList.size());
+    assertEquals(100, rankDtoList.get(0).getPrice());
+    assertEquals(1, rankDtoList.get(0).getRankPos());
+    assertEquals(3, rankDtoList.get(0).getRsEventId());
+
+    Trade trade2 = new Trade(500, 1);
+    mockMvc.perform(post("/rs/buy/2").contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsBytes(trade2))).andExpect(status().isOk());
+
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(2)))
+            .andExpect(jsonPath("$[0].eventName", is("event2")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[0].voteNum", is(0)))
+            .andExpect(jsonPath("$[1].eventName", is("event1")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[1].voteNum", is(10)))
+            .andExpect(status().isOk());
+    rankDtoList = rankDtoRepository.findAll();
+    assertEquals(1, rankDtoList.size());
+    assertEquals(500, rankDtoList.get(0).getPrice());
+    assertEquals(1, rankDtoList.get(0).getRankPos());
+    assertEquals(2, rankDtoList.get(0).getRsEventId());
+
+    List<RankRecordDto> rankRecordList = rankRecordRepository.findAll();
+    assertEquals(2, rankRecordList.size());
+    assertEquals(100, rankRecordList.get(0).getPrice());
+    assertEquals(1, rankRecordList.get(0).getRankPos());
+    assertEquals(3, rankRecordList.get(0).getRsEventId());
+    assertEquals(500, rankRecordList.get(1).getPrice());
+    assertEquals(1, rankRecordList.get(1).getRankPos());
+    assertEquals(2, rankRecordList.get(1).getRsEventId());
+  }
+
+  @Test
+  void should_get_bad_request_when_amount_is_not_enough_to_buy_the_rank() throws Exception {
+    UserDto userDtoTestData = UserDto.builder().userName("user").gender("male").age(20).email("user@gmail.com")
+            .phone("12345678901").build();
+    userRepository.save(userDtoTestData);
+    RsEventDto rsEventDtoTestData1 = RsEventDto.builder().eventName("event1").keyword("keyword1").voteNum(10)
+            .user(userDtoTestData).build();
+    RsEventDto rsEventDtoTestData2 = RsEventDto.builder().eventName("event2").keyword("keyword2").voteNum(0)
+            .user(userDtoTestData).build();
+    RsEventDto rsEventDtoTestData3 = RsEventDto.builder().eventName("event3").keyword("keyword3").voteNum(5)
+            .user(userDtoTestData).build();
+    rsEventRepository.save(rsEventDtoTestData1);
+    rsEventRepository.save(rsEventDtoTestData2);
+    rsEventRepository.save(rsEventDtoTestData3);
+    assertEquals(3, rsEventRepository.count());
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(3)))
+            .andExpect(jsonPath("$[0].eventName", is("event1")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[0].voteNum", is(10)))
+            .andExpect(jsonPath("$[1].eventName", is("event3")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword3")))
+            .andExpect(jsonPath("$[1].voteNum", is(5)))
+            .andExpect(jsonPath("$[2].eventName", is("event2")))
+            .andExpect(jsonPath("$[2].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[2].voteNum", is(0)))
+            .andExpect(status().isOk());
+    assertEquals(0, rankDtoRepository.count());
+
+    ObjectMapper objectMapper = new ObjectMapper();
+    Trade trade1 = new Trade(100, 1);
+    mockMvc.perform(post("/rs/buy/3").contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsBytes(trade1))).andExpect(status().isOk());
+
+    mockMvc.perform(get("/rs/list"))
+            .andExpect(jsonPath("$", hasSize(3)))
+            .andExpect(jsonPath("$[0].eventName", is("event3")))
+            .andExpect(jsonPath("$[0].keyword", is("keyword3")))
+            .andExpect(jsonPath("$[0].voteNum", is(5)))
+            .andExpect(jsonPath("$[1].eventName", is("event1")))
+            .andExpect(jsonPath("$[1].keyword", is("keyword1")))
+            .andExpect(jsonPath("$[1].voteNum", is(10)))
+            .andExpect(jsonPath("$[2].eventName", is("event2")))
+            .andExpect(jsonPath("$[2].keyword", is("keyword2")))
+            .andExpect(jsonPath("$[2].voteNum", is(0)))
+            .andExpect(status().isOk());
+    List<RankDto> rankDtoList = rankDtoRepository.findAll();
+    assertEquals(1, rankDtoList.size());
+    assertEquals(100, rankDtoList.get(0).getPrice());
+    assertEquals(1, rankDtoList.get(0).getRankPos());
+    assertEquals(3, rankDtoList.get(0).getRsEventId());
+
+    Trade trade2 = new Trade(50, 1);
+    mockMvc.perform(post("/rs/buy/2").contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsBytes(trade2))).andExpect(status().isBadRequest());
   }
 }
